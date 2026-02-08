@@ -94,6 +94,8 @@ extension ImagePipeline {
         /// rate limiter only activates when requests are started and cancelled at
         /// a high rate, such as during fast scrolling. `true` by default.
         public var isRateLimiterEnabled = true
+        
+        public var rateLimiterConfig: RateLimiterConfig = .init()
 
         /// Enables progressive decoding. When enabled, the pipeline produces a
         /// new image preview each time it receives a new chunk of data. Whether
@@ -272,6 +274,14 @@ extension ImagePipeline {
         /// - note: If the resource is local (has file:// or data:// scheme),
         /// only the processed images are stored.
         case storeAll
+    }
+    
+    ///   - rate: Maximum number of requests per second. 80 by default.
+    ///   - burst: Maximum number of requests which can be executed without any
+    ///   delays when "bucket is full". 25 by default.
+    public struct RateLimiterConfig: Sendable, Equatable {
+        let rate: Int = 80
+        let burst: Int = 25
     }
 
     /// Determines how progressive (partial) image previews are generated during
