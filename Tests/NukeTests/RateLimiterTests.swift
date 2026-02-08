@@ -7,8 +7,8 @@ import Testing
 
 @Suite(.timeLimit(.minutes(5))) @ImagePipelineActor
 struct RateLimiterTests {
-    let rateLimiter = RateLimiter(rate: 10, burst: 2)
-
+    // max 2 req/second, so the first 2 requests should be executed immediate, but more than 2 should be queued up
+    let rateLimiter = RateLimiter(interval: 1, maxRequestCount: 2)
     @Test func burstIsExecutedImmediately() {
         var isExecuted = Array(repeating: false, count: 4)
         for i in isExecuted.indices {
@@ -28,7 +28,7 @@ struct RateLimiterTests {
                 return i != 1 // important!
             }
         }
-        #expect(isExecuted == [true, true, true, false], "Expect first 2 items to be executed immediately")
+        #expect(isExecuted == [true, true, false, false], "Expect first 2 items to be executed immediately")
     }
 
     @Test func overflow() async {
@@ -50,7 +50,7 @@ struct RateLimiterTests {
 
     @Test func burstOfOneExecutesSingleItemImmediately() {
         // GIVEN - rate limiter that only allows 1 immediate execution
-        let limiter = RateLimiter(rate: 10, burst: 1)
+        let limiter = RateLimiter(interval: 10, maxRequestCount: 1)
         var executed = [false, false]
 
         // WHEN
@@ -60,25 +60,5 @@ struct RateLimiterTests {
         // THEN - only the first item runs immediately; the second is deferred
         #expect(executed[0] == true)
         #expect(executed[1] == false)
-    }
-
-    @Test func allPostponedItemsDoNotDrainBucket() {
-        // GIVEN - all items return false (none extract a token)
-        let limiter = RateLimiter(rate: 10, burst: 2)
-        var executed = [false, false, false, false, false]
-
-        for i in executed.indices {
-            limiter.execute {
-                executed[i] = true
-                return false // never consumes a token
-            }
-        }
-
-        // THEN - burst allows the first 2 to run; subsequent items are queued
-        // but since they all return false, earlier items' buckets refill and
-        // the third item also executes (no token consumed)
-        #expect(executed[0] == true)
-        #expect(executed[1] == true)
-        #expect(executed[2] == true)
     }
 }

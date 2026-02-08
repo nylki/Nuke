@@ -62,7 +62,7 @@ public final class ImagePipeline: Sendable {
     }
     private nonisolated let _nextTaskId = Mutex<UInt64>(value: 0)
 
-    let rateLimiter: RateLimiter?
+    var rateLimiter: RateLimiter?
     nonisolated let id = UUID()
     nonisolated(unsafe) var onTaskStarted: ((ImageTask) -> Void)? // Debug purposes
 
@@ -81,7 +81,7 @@ public final class ImagePipeline: Sendable {
         delegate: (any ImagePipeline.Delegate)? = nil
     ) {
         self.configuration = configuration
-        self.rateLimiter = configuration.isRateLimiterEnabled ? RateLimiter() : nil
+        
         self.delegate = delegate ?? ImagePipelineDefaultDelegate()
         self.isDefaultDelegate = delegate == nil
         (configuration.dataLoader as? DataLoader)?.prefersIncrementalDelivery = configuration.isProgressiveDecodingEnabled
@@ -93,6 +93,17 @@ public final class ImagePipeline: Sendable {
         self.tasksFetchOriginalData = TaskPool(isCoalescingEnabled)
 
         let id = self.id
+        
+        if configuration.isRateLimiterEnabled {
+            let interval = configuration.rateLimiterConfig.interval
+            let maxRequestCount = configuration.rateLimiterConfig.maxRequestCount
+            self.rateLimiter = nil
+            Task { @ImagePipelineActor in
+                let limiter = RateLimiter(interval: interval, maxRequestCount: maxRequestCount)
+                self.rateLimiter = limiter
+            }
+        }
+        
         Task { @ImagePipelineActor in ResumableDataStorage.shared.register(id) }
     }
 
