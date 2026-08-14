@@ -24,10 +24,11 @@ final class RateLimiter {
 
     /// Initializes the `RateLimiter` with the given configuration.
     /// - parameters:
-    ///   - interval: The time interval to rate limit (now - interval) as a sliding window
-    ///   - maxRequestCount: Maximum number of requests which can be executed during the interval.
-    init(interval: Double, maxRequestCount: Double) {
-        self.bucket = TokenBucket(interval: interval, maxRequestCount: maxRequestCount)
+    ///   - queue: Queue on which to execute pending tasks.
+    ///   - rate: Maximum number of requests per second. 80 by default.
+    ///   - burst: Maximum number of requests which can be executed without any
+    nonisolated init(rate: Int, burst: Int) {
+        self.bucket = TokenBucket(rate: Double(rate), burst: Double(burst))
     }
 
     /// - parameter closure: Returns `true` if the closure was executed, `false`

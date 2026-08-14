@@ -270,16 +270,12 @@ extension ImagePipeline {
         case storeAll
     }
     
-    ///   - interval: The time interval to rate limit (now - interval) as a sliding window
-    ///   - maxRequestCount: Maximum number of requests which can be executed during the interval.
-    @frozen public struct RateLimiterConfig: Sendable, Equatable {
-        let interval: Double
-        let maxRequestCount: Double
-        
-        public init(interval: Double = 10, maxRequestCount: Double = 100) {
-            self.interval = interval
-            self.maxRequestCount = maxRequestCount
-        }
+    ///   - rate: Maximum number of requests per second. 80 by default.
+    ///   - burst: Maximum number of requests which can be executed without any
+    ///   delays when "bucket is full". 25 by default.
+    public struct RateLimiterConfig: Sendable, Equatable {
+        let rate: Int = 80
+        let burst: Int = 25
     }
 
     /// Determines how progressive (partial) image previews are generated during

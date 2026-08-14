@@ -19,6 +19,39 @@
 
 # Nuke 13
 
+## Nuke 13.1.0
+
+*Aug 9, 2026*
+
+- Fix `GaussianBlur` crash on grayscale images by @Delarkz in https://github.com/kean/Nuke/pull/880
+- Fix cache initialization for mergeable libraries by @ZHUOLIN0928 in https://github.com/kean/Nuke/pull/881
+- Add asynchronous image decoding support by @thliu21 in https://github.com/kean/Nuke/pull/879
+- Add `ImageDecoderRegistry.unregister(_:)`. `register(_:)` now returns a discardable `RegistrationToken` for removing an individual decoder instead of clearing the entire registry
+- `ImageDecoderRegistry.register(_:)` now takes a `@Sendable` closure. The registry is shared between the pipelines and the closures are called on the decoding threads
+- Fix a data race in `ImageDecoderRegistry` where `decoder(for:)` iterated the registered decoders without holding the lock. The registry is now backed by `Mutex` and is `Sendable` instead of `@unchecked Sendable`
+- Fix a leak where requests that finish synchronously (memory cache hits, disk cache hits for `data(for:)`, local resources, `.returnCacheDataDontLoad` misses, and malformed URLs) were never removed from the pipeline, retaining their responses for its lifetime
+- Fix `ImageTask.Event.started` being delivered to `ImagePipeline.Delegate` after `.finished` for requests that finish synchronously
+- Fix `DataLoader` calling `completion` twice when response validation fails, violating the `DataLoading` contract
+- Fix a request cancelled while `ImagePipeline.Delegate.willLoadData(for:urlRequest:pipeline:)` was suspended still running the download to completion, discarding the result and occupying a slot in `dataLoadingQueue`
+- Fix resumable data being lost when a request ended before the server responded. It's now put back if nothing new was downloaded
+- Fix requests with `ImageRequest.Options.skipDataLoadingQueue` not cancelling the underlying `Task`, leaving an async `willLoadData` or a custom `data` fetch closure running after cancellation
+- Fix progressive previews being permanently disabled when the first downloaded chunk isn't enough to tell that the image supports them, which is common for progressive JPEGs with large EXIF/ICC preambles. The policy is now re-evaluated as more data arrives, but only until it starts producing previews and with a hard cap on the number of attempts
+- Fix `ImageDecoders.Empty` not marking the containers returned by `decodePartiallyDownloadedData(_:)` as previews, so the truncated data was stored in the caches and delivered as a completed response on the subsequent cache hits
+- Fix `ImageProcessors.CoreImageFilter` sharing a single mutable `CIFilter` between concurrently processed images. `CIFilter` is not thread-safe, so the processor could produce an image from another request's input and cache it under the wrong key. It now applies a copy of the filter
+- Fix the screen scale used by `ImageProcessingOptions.Unit.points` being read once and cached for the lifetime of the process. `UITraitCollection.current` reports a `0` display scale outside of the contexts managed by UIKit, so if the first points-based `ImageRequest` was created on a background thread, every subsequent resize failed with `processingFailed` and the point-based border widths and corner radii became `0`
+- Fix a crash on macOS when an `ImageProcessingOptions.Border` is created with an `NSColor` outside an RGB colorspace, including `.black`, `.white`, and the catalog colors such as `.labelColor`. Unlike `UIColor`, `NSColor` raises from `getRed(_:green:blue:alpha:)` instead of converting on the fly, so merely reading the processor `identifier` terminated the process. The color is now converted to sRGB first
+- Fix `ImagePrefetcher.stopPrefetching(with:)` and `ImagePrefetcher.stopPrefetching()` doing nothing for the prefetches that were scheduled but haven't started yet. In the standard collection view pattern, the requests ran the entire download/decode/cache cycle anyway
+- Fix `ImagePrefetcher.priority` not reaching the prefetches that were scheduled but haven't started yet. They kept the priority frozen in their original requests and eventually did the actual work at the old priority
+- Fix the async/await variant of `FetchImage.load(_:)` delivering a result after the load was cancelled or superseded, overwriting the state of the newer load
+- Fix `LazyImage` with the `lowerPriority` disappear behavior permanently lowering the priority of its requests after the view goes off-screen. The override wasn't reset when the view reappeared
+- Fix `LazyImageView` stacking the views created by `makeImageView`. A view was added for every displayed response without removing the previous one, so the orphaned views survived cell reuse, covered the newer content, and retained their images
+
+## Nuke 13.0.6
+
+*May 7, 2026*
+
+- Fix crashes on the Swift 5 boundary caused by dynamic actor isolation when invoking `Optional.map` with closures inferred as `@MainActor` in `LazyImage`, `LazyImageView`, `FetchImage`, and `loadImage(with:into:)`
+
 ## Nuke 13.0.5
 
 *May 3, 2026*

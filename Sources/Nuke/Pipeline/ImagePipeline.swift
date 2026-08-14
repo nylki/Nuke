@@ -66,6 +66,9 @@ public final class ImagePipeline: Sendable {
     nonisolated let id = UUID()
     nonisolated(unsafe) var onTaskStarted: ((ImageTask) -> Void)? // Debug purposes
 
+    /// The number of image tasks the pipeline currently retains. Debug purposes.
+    var taskCount: Int { tasks.count }
+
     nonisolated deinit {
         let id = self.id
         Task { @ImagePipelineActor in ResumableDataStorage.shared.unregister(id) }
@@ -81,6 +84,11 @@ public final class ImagePipeline: Sendable {
         delegate: (any ImagePipeline.Delegate)? = nil
     ) {
         self.configuration = configuration
+        self.rateLimiter = configuration.isRateLimiterEnabled ?
+            RateLimiter(
+                rate: configuration.rateLimiterConfig.rate,
+                burst: configuration.rateLimiterConfig.burst
+            ) : nil
         
         self.delegate = delegate ?? ImagePipelineDefaultDelegate()
         self.isDefaultDelegate = delegate == nil
@@ -217,14 +225,20 @@ public final class ImagePipeline: Sendable {
             return task._process(.error(.pipelineInvalidated))
         }
         let worker = isDataTask ? makeTaskLoadData(for: task.request) : makeTaskLoadImage(for: task.request)
-        task._subscription = worker.subscribe(priority: task.priority.taskPriority, subscriber: task) { [weak task] in
-            task?._process($0)
-        }
+        // Important: the task has to be registered and reported as started
+        // _before_ it subscribes to the worker. The worker can finish the task
+        // synchronously (memory cache hit, local resource, and other paths that
+        // require no async work), and the task has to be already in the list for
+        // `removeTask` to remove it, and already started for the events to be
+        // delivered in the correct order.
         task._node = tasks.append(task)
         if !isDataTask {
             delegate.imageTask(task, didReceiveEvent: .started, pipeline: self)
         }
         onTaskStarted?(task)
+        task._subscription = worker.subscribe(priority: task.priority.taskPriority, subscriber: task) { [weak task] in
+            task?._process($0)
+        }
     }
 
     // MARK: - Image Task Events
