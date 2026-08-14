@@ -12,18 +12,23 @@ extension String {
     /// print("http://test.com".sha1)
     /// // prints "50334ee0b51600df6397ce93ceed4728c37fee4e"
     /// ```
-    var sha1: String? {
-        guard let input = self.data(using: .utf8) else {
-            return nil // The conversion to .utf8 should never fail
+    var sha1: String {
+        let digest = Insecure.SHA1.hash(data: Data(self.utf8))
+        let hexCount = Insecure.SHA1Digest.byteCount * 2
+        let bytes = [UInt8](unsafeUninitializedCapacity: hexCount) { buffer, count in
+            var i = 0
+            for byte in digest {
+                buffer[i] = sha1HexChars[Int(byte >> 4)]
+                buffer[i &+ 1] = sha1HexChars[Int(byte & 0x0F)]
+                i &+= 2
+            }
+            count = hexCount
         }
-        let digest = Insecure.SHA1.hash(data: input)
-        var output = ""
-        for byte in digest {
-            output.append(String(format: "%02x", byte))
-        }
-        return output
+        return String(decoding: bytes, as: UTF8.self)
     }
 }
+
+private let sha1HexChars: [UInt8] = Array("0123456789abcdef".utf8)
 
 extension URL {
     var isLocalResource: Bool {

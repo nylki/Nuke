@@ -127,7 +127,7 @@ public struct ImageRequest: CustomStringConvertible, Sendable, ExpressibleByStri
 
     /// Returns a debug request description.
     public var description: String {
-        "ImageRequest(resource: \(ref.resource), priority: \(priority), processors: \(processors), options: \(options), userInfo: \(userInfo))"
+        "ImageRequest(resource: \(ref.resource), priority: \(ref.priority), processors: \(ref.processors), options: \(ref.options), userInfo: \(ref.userInfo ?? [:]))"
     }
 
     // MARK: Initializers
@@ -445,8 +445,6 @@ public struct ImageRequest: CustomStringConvertible, Sendable, ExpressibleByStri
         struct Options: OptionSet, Hashable, Sendable {
             let rawValue: UInt8
 
-            init(rawValue: UInt8) { self.rawValue = rawValue }
-
             static let createThumbnailFromImageIfAbsent = Options(rawValue: 1 << 0)
             static let createThumbnailFromImageAlways = Options(rawValue: 1 << 1)
             static let createThumbnailWithTransform = Options(rawValue: 1 << 2)
@@ -507,7 +505,7 @@ extension ImageRequest {
     /// avoid memberwise retain/releases when ``ImageRequest`` is passed around.
     private final class Container: @unchecked Sendable {
         // It's beneficial to put these fields in that order to align them
-        // as they perfeclty align at the boundary due to their size
+        // as they perfectly align at the boundary due to their size
         let resource: Resource
         var priority: Priority
         var options: Options

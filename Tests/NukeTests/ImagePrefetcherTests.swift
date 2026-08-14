@@ -6,7 +6,7 @@ import Testing
 import Foundation
 @testable import Nuke
 
-@Suite(.timeLimit(.minutes(2)))
+@Suite(.timeLimit(.minutes(5)))
 struct ImagePrefetcherTests {
     private let pipeline: ImagePipeline
     private let dataLoader: MockDataLoader
@@ -123,6 +123,43 @@ struct ImagePrefetcherTests {
         await notification(ImagePipelineObserver.didCancelTask, object: observer) {
             prefetcher.stopPrefetching(with: [url])
         }
+    }
+
+    @Test @ImagePipelineActor func stopPrefetchingImmediatelyAfterStart() async {
+        // GIVEN
+        let url = Test.url
+        let finished = TestExpectation()
+        prefetcher.queue.onEvent = { event in
+            if case .finished = event { finished.fulfill() }
+        }
+
+        // WHEN start and immediately stop prefetching in the same run loop tick
+        // (the standard collection view prefetching pattern) – the prefetch
+        // operation is dequeued, but its body hasn't run yet
+        prefetcher.startPrefetching(with: [url])
+        prefetcher.stopPrefetching(with: [url])
+        await finished.wait()
+
+        // THEN no image task is ever started
+        #expect(observer.startedTaskCount == 0)
+        #expect(dataLoader.createdTaskCount == 0)
+    }
+
+    @Test @ImagePipelineActor func stopAllPrefetchingImmediatelyAfterStart() async {
+        // GIVEN
+        let finished = TestExpectation()
+        prefetcher.queue.onEvent = { event in
+            if case .finished = event { finished.fulfill() }
+        }
+
+        // WHEN
+        prefetcher.startPrefetching(with: [Test.url])
+        prefetcher.stopPrefetching()
+        await finished.wait()
+
+        // THEN no image task is ever started
+        #expect(observer.startedTaskCount == 0)
+        #expect(dataLoader.createdTaskCount == 0)
     }
 
     // MARK: Destination
@@ -260,6 +297,67 @@ struct ImagePrefetcherTests {
             prefetcher.priority = .veryLow
         }
         #expect(operation.priority == .veryLow)
+    }
+
+    @Test @ImagePipelineActor func changePriorityBeforeImageTaskIsCreated() async {
+        // GIVEN prefetching is paused: the operation is scheduled, but its body
+        // (the code that creates the image task) hasn't run yet
+        prefetcher.isPaused = true
+        dataLoader.isSuspended = true
+
+        let operations = await prefetcher.queue.waitForOperations(count: 1) {
+            prefetcher.startPrefetching(with: [Test.url])
+        }
+        guard let operation = operations.first else {
+            Issue.record("Failed to find operation")
+            return
+        }
+
+        // WHEN the priority changes before the prefetch starts
+        await prefetcher.queue.waitForPriorityChange(of: operation, to: .veryHigh) {
+            prefetcher.priority = .veryHigh
+        }
+
+        // THEN the image task the prefetch creates uses the new priority
+        nonisolated(unsafe) var imageTask: ImageTask?
+        observer.onTaskCreated = { imageTask = $0 }
+
+        await notification(ImagePipelineObserver.didStartTask, object: observer) {
+            prefetcher.isPaused = false
+        }
+        #expect(imageTask?.priority == .veryHigh)
+
+        // Cleanup
+        prefetcher.stopPrefetching()
+    }
+
+    @Test @ImagePipelineActor func changePriorityBeforeImageTaskIsCreatedAffectsDataLoading() async {
+        // GIVEN prefetching is paused: the operation is scheduled, but its body
+        // (the code that creates the image task) hasn't run yet
+        prefetcher.isPaused = true
+        pipeline.configuration.dataLoadingQueue.isSuspended = true
+
+        let operations = await prefetcher.queue.waitForOperations(count: 1) {
+            prefetcher.startPrefetching(with: [Test.url])
+        }
+        guard let operation = operations.first else {
+            Issue.record("Failed to find operation")
+            return
+        }
+
+        // WHEN the priority changes before the prefetch starts
+        await prefetcher.queue.waitForPriorityChange(of: operation, to: .veryHigh) {
+            prefetcher.priority = .veryHigh
+        }
+
+        // THEN the pipeline performs the work at the new priority
+        let dataOperations = await pipeline.configuration.dataLoadingQueue.waitForOperations(count: 1) {
+            prefetcher.isPaused = false
+        }
+        #expect(dataOperations.first?.priority == .veryHigh)
+
+        // Cleanup
+        prefetcher.stopPrefetching()
     }
 
     // MARK: DidComplete

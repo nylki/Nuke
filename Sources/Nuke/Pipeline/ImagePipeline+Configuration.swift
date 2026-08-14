@@ -123,16 +123,15 @@ extension ImagePipeline {
         /// `data` schemes) inline without using the data loader. By default, `true`.
         public var isLocalResourcesSupportEnabled = true
 
-        /// The maximum decoded image size in bytes allowed before automatic
-        /// downscaling. Images whose decoded bitmap would exceed this limit are
-        /// decoded at a reduced resolution. `nil` disables the check. The
-        /// default value is calculated based on the device's physical memory.
-        public var maximumDecodedImageSize: Int? = {
-            let physicalMemory = ProcessInfo.processInfo.physicalMemory
-            let ratio = physicalMemory <= (536_870_912 /* 512 MB */) ? 0.02 : 0.04
-            let limit = min(67_108_864 /* 64 MB */, physicalMemory / UInt64(1 / ratio))
-            return Int(limit)
-        }()
+        /// - warning: Deprecated. The automatic downscaling implementation has
+        /// been removed. Use ``ImageRequest/ThumbnailOptions`` to control the
+        /// decoded image size on a per-request basis instead.
+        @available(*, deprecated, message: "Automatic decoded image size limiting has been removed. Use ImageRequest.ThumbnailOptions to control decoded image size per request.")
+        public var maximumDecodedImageSize: Int? {
+            get { _maximumDecodedImageSize }
+            set { _maximumDecodedImageSize = newValue }
+        }
+        private var _maximumDecodedImageSize: Int?
 
         /// The maximum response data size in bytes allowed before the download
         /// is automatically cancelled. Downloads that exceed this limit fail
@@ -153,12 +152,7 @@ extension ImagePipeline {
         ///
         /// For more information, see the [Logging](https://developer.apple.com/documentation/os/logging)
         /// documentation and [WWDC 2018 Session 405](https://developer.apple.com/videos/play/wwdc2018/405/).
-        public static var isSignpostLoggingEnabled: Bool {
-            get { _isSignpostLoggingEnabled.value }
-            set { _isSignpostLoggingEnabled.value = newValue }
-        }
-
-        private static let _isSignpostLoggingEnabled = Mutex(value: false)
+        nonisolated(unsafe) public static var isSignpostLoggingEnabled = false
 
         private var isCustomImageCacheProvided = false
 

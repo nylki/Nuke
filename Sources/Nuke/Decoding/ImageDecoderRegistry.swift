@@ -5,12 +5,26 @@
 import Foundation
 
 /// A registry of image codecs.
-public final class ImageDecoderRegistry: @unchecked Sendable {
+public final class ImageDecoderRegistry: Sendable {
     /// A shared registry.
     public static let shared = ImageDecoderRegistry()
 
-    private var matches = [(ImageDecodingContext) -> (any ImageDecoding)?]()
-    private let lock = NSLock()
+    private let state = Mutex(value: State())
+
+    private struct State {
+        var registrations: [Registration] = []
+        var nextID = 0
+    }
+
+    private struct Registration {
+        let token: RegistrationToken
+        let match: @Sendable (ImageDecodingContext) -> (any ImageDecoding)?
+    }
+
+    /// An opaque token that identifies a registered decoder.
+    public struct RegistrationToken: Hashable, Sendable {
+        fileprivate let id: Int
+    }
 
     /// Initializes a custom registry.
     public init() {
@@ -19,8 +33,10 @@ public final class ImageDecoderRegistry: @unchecked Sendable {
 
     /// Returns a decoder that matches the given context.
     public func decoder(for context: ImageDecodingContext) -> (any ImageDecoding)? {
-        for match in matches.reversed() {
-            if let decoder = match(context) {
+        // Iterate over a snapshot: the closures are provided by the user and
+        // must never be called while holding the lock.
+        for registration in state.value.registrations.reversed() {
+            if let decoder = registration.match(context) {
                 return decoder
             }
         }
@@ -29,18 +45,38 @@ public final class ImageDecoderRegistry: @unchecked Sendable {
 
     /// Registers a decoder to be used in a given decoding context.
     ///
+    /// The decoders are evaluated in the reverse order of registration: the
+    /// most recently registered decoder is asked first.
+    ///
     /// **Progressive Decoding**
     ///
     /// The decoder is created once and is used for the entire decoding session,
     /// including progressively decoded images. If the decoder doesn't support
     /// progressive decoding, return `nil` when `isCompleted` is `false`.
-    public func register(_ match: @escaping (ImageDecodingContext) -> (any ImageDecoding)?) {
-        lock.withLock { matches.append(match) }
+    ///
+    /// - returns: A token that can be passed to ``unregister(_:)`` to remove
+    /// the decoder. Can be safely ignored.
+    @discardableResult
+    public func register(_ match: @escaping @Sendable (ImageDecodingContext) -> (any ImageDecoding)?) -> RegistrationToken {
+        state.withLock {
+            let token = RegistrationToken(id: $0.nextID)
+            $0.nextID += 1
+            $0.registrations.append(Registration(token: token, match: match))
+            return token
+        }
     }
 
-    /// Removes all registered decoders.
+    /// Removes the decoder registered with the given token. Does nothing if the
+    /// decoder is no longer registered.
+    public func unregister(_ token: RegistrationToken) {
+        state.withLock { state in
+            state.registrations.removeAll { $0.token == token }
+        }
+    }
+
+    /// Removes all registered decoders, including the default one.
     public func clear() {
-        lock.withLock { matches = [] }
+        state.withLock { $0.registrations.removeAll() }
     }
 }
 
@@ -55,9 +91,14 @@ public struct ImageDecodingContext: Sendable {
     /// The preview policy for progressive decoding. Set by the pipeline
     /// delegate for partial data; defaults to `.incremental`.
     public var previewPolicy: ImagePipeline.PreviewPolicy = .incremental
-    /// The maximum decoded image size in bytes before automatic downscaling.
-    /// `nil` disables the check. Set by the pipeline from its configuration.
-    public var maximumDecodedImageSize: Int?
+    /// - warning: Deprecated. The automatic downscaling implementation has
+    /// been removed. Setting this value has no effect.
+    @available(*, deprecated, message: "Automatic decoded image size limiting has been removed. Setting this value has no effect.")
+    public var maximumDecodedImageSize: Int? {
+        get { _maximumDecodedImageSize }
+        set { _maximumDecodedImageSize = newValue }
+    }
+    private var _maximumDecodedImageSize: Int?
 
     public init(request: ImageRequest, data: Data, isCompleted: Bool = true, urlResponse: URLResponse? = nil, cacheType: ImageResponse.CacheType? = nil) {
         self.request = request

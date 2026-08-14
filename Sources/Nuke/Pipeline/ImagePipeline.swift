@@ -31,7 +31,7 @@ public final class ImagePipeline: Sendable {
     /// Returns the shared image pipeline.
     nonisolated public static var shared: ImagePipeline {
         get { _shared.value }
-        set { _shared.value = newValue }
+        set { _shared.withLock { $0 = newValue } }
     }
 
     private nonisolated static let _shared = Mutex(value: ImagePipeline(configuration: .withURLCache))
@@ -43,8 +43,9 @@ public final class ImagePipeline: Sendable {
     nonisolated public var cache: ImagePipeline.Cache { .init(pipeline: self) }
 
     let delegate: any ImagePipeline.Delegate
+    let isDefaultDelegate: Bool
 
-    private var tasks = [ImageTask: TaskSubscription]()
+    private let tasks = LinkedList<ImageTask>()
 
     private let tasksLoadData: TaskPool<TaskLoadImageKey, ImageResponse, Error>
     private let tasksLoadImage: TaskPool<TaskLoadImageKey, ImageResponse, Error>
@@ -64,6 +65,9 @@ public final class ImagePipeline: Sendable {
     let rateLimiter: RateLimiter?
     nonisolated let id = UUID()
     nonisolated(unsafe) var onTaskStarted: ((ImageTask) -> Void)? // Debug purposes
+
+    /// The number of image tasks the pipeline currently retains. Debug purposes.
+    var taskCount: Int { tasks.count }
 
     nonisolated deinit {
         let id = self.id
@@ -87,6 +91,7 @@ public final class ImagePipeline: Sendable {
             ) : nil
         
         self.delegate = delegate ?? ImagePipelineDefaultDelegate()
+        self.isDefaultDelegate = delegate == nil
         (configuration.dataLoader as? DataLoader)?.prefersIncrementalDelivery = configuration.isProgressiveDecodingEnabled
 
         let isCoalescingEnabled = configuration.isTaskCoalescingEnabled
@@ -125,7 +130,9 @@ public final class ImagePipeline: Sendable {
         Task { @ImagePipelineActor in
             guard !self.isInvalidated else { return }
             self.isInvalidated = true
-            self.tasks.keys.forEach(self.imageTaskCancelCalled)
+            while let node = self.tasks.first {
+                self.imageTaskCancelCalled(node.value)
+            }
         }
     }
 
@@ -200,41 +207,57 @@ public final class ImagePipeline: Sendable {
         guard task._state != .cancelled else {
             // The task gets started asynchronously in a `Task` and cancellation
             // can happen before the pipeline reached `startImageTask`. In that
-            // case, the `cancel` method do no send the task event.
+            // case, the `cancel` method does not send the task event.
             return task._dispatch(.finished(.failure(.cancelled)))
         }
         guard !isInvalidated else {
             return task._process(.error(.pipelineInvalidated))
         }
         let worker = isDataTask ? makeTaskLoadData(for: task.request) : makeTaskLoadImage(for: task.request)
-        tasks[task] = worker.subscribe(priority: task.priority.taskPriority, subscriber: task) { [weak task] in
-            task?._process($0)
-        }
+        // Important: the task has to be registered and reported as started
+        // _before_ it subscribes to the worker. The worker can finish the task
+        // synchronously (memory cache hit, local resource, and other paths that
+        // require no async work), and the task has to be already in the list for
+        // `removeTask` to remove it, and already started for the events to be
+        // delivered in the correct order.
+        task._node = tasks.append(task)
         if !isDataTask {
             delegate.imageTask(task, didReceiveEvent: .started, pipeline: self)
         }
         onTaskStarted?(task)
+        task._subscription = worker.subscribe(priority: task.priority.taskPriority, subscriber: task) { [weak task] in
+            task?._process($0)
+        }
     }
 
     // MARK: - Image Task Events
 
     func imageTaskCancelCalled(_ task: ImageTask) {
-        tasks.removeValue(forKey: task)?.unsubscribe()
+        removeTask(task)
+        task._subscription?.unsubscribe()
+        task._subscription = nil
         task._cancel()
     }
 
+    private func removeTask(_ task: ImageTask) {
+        guard let node = task._node else { return }
+        tasks.remove(node)
+        task._node = nil
+    }
+
     func imageTaskUpdatePriorityCalled(_ task: ImageTask, priority: ImageRequest.Priority) {
-        tasks[task]?.setPriority(priority.taskPriority)
+        task._subscription?.setPriority(priority.taskPriority)
     }
 
     func imageTask(_ task: ImageTask, didProcessEvent event: ImageTask.Event, isDataTask: Bool) {
         switch event {
         case .finished:
-            tasks[task] = nil
+            removeTask(task)
+            task._subscription = nil
         default: break
         }
 
-        if !isDataTask {
+        if !isDataTask && !isDefaultDelegate {
             delegate.imageTask(task, didReceiveEvent: event, pipeline: self)
         }
     }
@@ -255,8 +278,8 @@ public final class ImagePipeline: Sendable {
     //
     // Each task represents a resource or a piece of work required to produce the
     // final result. The pipeline reduces the amount of duplicated work by coalescing
-    // the tasks that represent the same work. For example, if you all `loadImage()`
-    // and `loadData()` with the same request, only on `TaskFetchOriginalImageData`
+    // the tasks that represent the same work. For example, if you call `loadImage()`
+    // and `loadData()` with the same request, only one `TaskFetchOriginalImageData`
     // is created. The work is split between tasks to minimize any duplicated work.
 
     func makeTaskLoadImage(for request: ImageRequest) -> AsyncTask<ImageResponse, Error>.Publisher {

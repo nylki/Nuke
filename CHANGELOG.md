@@ -1,4 +1,93 @@
+## Release History
+
+| Version          | Date         | Swift | Xcode | Platforms                                                   |
+|------------------|--------------|-------|-------|-------------------------------------------------------------|
+| [13.0](#nuke-13) | Mar 22, 2026 | 6.2   | 26.0  | iOS 15.0, watchOS 8.0, macOS 12.0, tvOS 13.0, visionOS 1.0  |
+| [12.0](#nuke-12) | Mar 4, 2023  | 5.7   | 14.1  | iOS 13.0, watchOS 6.0, macOS 10.15, tvOS 13.0               |
+| [11.0](#nuke-11) | Jul 20, 2022 | 5.6   | 13.3  | iOS 13.0, watchOS 6.0, macOS 10.15, tvOS 13.0               |
+| [10.0](#nuke-10) | June 1, 2021 | 5.3   | 12.0  | iOS 11.0, watchOS 4.0, macOS 10.13, tvOS 11.0               |
+| [9.0](#nuke-9)   | May 20, 2020 | 5.1   | 11.0  | iOS 11.0, watchOS 4.0, macOS 10.13, tvOS 11.0               |
+| [8.0](#nuke-8)   | July 8, 2019 | 5.0   | 10.2  | iOS 10.0, watchOS 3.0, macOS 10.12, tvOS 10.0               |
+| [7.6](#nuke-7)   | Apr 7, 2019  | 4.2   | 10.1  | iOS 10.0, watchOS 3.0, macOS 10.12, tvOS 10.0               |
+| [6.0](#nuke-6)   | Dec 23, 2017 | 4.0   | 9.2   | iOS 9.0, watchOS 2.0, macOS 10.11, tvOS 9.0                 |
+| [5.0](#nuke-5)   | Feb 1, 2017  | 3.0   | 8.0   | iOS 9.0, watchOS 2.0, macOS 10.11, tvOS 9.0                 |
+| [4.0](#nuke-4)   | Sep 19, 2016 | 3.0   | 8.0   | iOS 9.0, watchOS 2.0, macOS 10.11, tvOS 9.0                 |
+| [3.0](#nuke-3)   | Mar 26, 2016 | 2.2   | 7.3   | iOS 8.0, watchOS 2.0, macOS 10.9, tvOS 9.0                  |
+| [2.0](#nuke-2)   | Feb 6, 2016  | 2.0   | 7.1   | iOS 8.0, watchOS 2.0, macOS 10.9, tvOS 9.0                  |
+| [1.0](#nuke-1)   | Oct 18, 2015 | 2.0   | 7.0   | iOS 8.0, watchOS 2.0, macOS 10.9                            |
+| [0.2](#nuke-0x)  | Sep 18, 2015 | 2.0   | 7.0   | iOS 8.0, watchOS 2.0                                        |
+
 # Nuke 13
+
+## Nuke 13.1.0
+
+*Aug 9, 2026*
+
+- Fix `GaussianBlur` crash on grayscale images by @Delarkz in https://github.com/kean/Nuke/pull/880
+- Fix cache initialization for mergeable libraries by @ZHUOLIN0928 in https://github.com/kean/Nuke/pull/881
+- Add asynchronous image decoding support by @thliu21 in https://github.com/kean/Nuke/pull/879
+- Add `ImageDecoderRegistry.unregister(_:)`. `register(_:)` now returns a discardable `RegistrationToken` for removing an individual decoder instead of clearing the entire registry
+- `ImageDecoderRegistry.register(_:)` now takes a `@Sendable` closure. The registry is shared between the pipelines and the closures are called on the decoding threads
+- Fix a data race in `ImageDecoderRegistry` where `decoder(for:)` iterated the registered decoders without holding the lock. The registry is now backed by `Mutex` and is `Sendable` instead of `@unchecked Sendable`
+- Fix a leak where requests that finish synchronously (memory cache hits, disk cache hits for `data(for:)`, local resources, `.returnCacheDataDontLoad` misses, and malformed URLs) were never removed from the pipeline, retaining their responses for its lifetime
+- Fix `ImageTask.Event.started` being delivered to `ImagePipeline.Delegate` after `.finished` for requests that finish synchronously
+- Fix `DataLoader` calling `completion` twice when response validation fails, violating the `DataLoading` contract
+- Fix a request cancelled while `ImagePipeline.Delegate.willLoadData(for:urlRequest:pipeline:)` was suspended still running the download to completion, discarding the result and occupying a slot in `dataLoadingQueue`
+- Fix resumable data being lost when a request ended before the server responded. It's now put back if nothing new was downloaded
+- Fix requests with `ImageRequest.Options.skipDataLoadingQueue` not cancelling the underlying `Task`, leaving an async `willLoadData` or a custom `data` fetch closure running after cancellation
+- Fix progressive previews being permanently disabled when the first downloaded chunk isn't enough to tell that the image supports them, which is common for progressive JPEGs with large EXIF/ICC preambles. The policy is now re-evaluated as more data arrives, but only until it starts producing previews and with a hard cap on the number of attempts
+- Fix `ImageDecoders.Empty` not marking the containers returned by `decodePartiallyDownloadedData(_:)` as previews, so the truncated data was stored in the caches and delivered as a completed response on the subsequent cache hits
+- Fix `ImageProcessors.CoreImageFilter` sharing a single mutable `CIFilter` between concurrently processed images. `CIFilter` is not thread-safe, so the processor could produce an image from another request's input and cache it under the wrong key. It now applies a copy of the filter
+- Fix the screen scale used by `ImageProcessingOptions.Unit.points` being read once and cached for the lifetime of the process. `UITraitCollection.current` reports a `0` display scale outside of the contexts managed by UIKit, so if the first points-based `ImageRequest` was created on a background thread, every subsequent resize failed with `processingFailed` and the point-based border widths and corner radii became `0`
+- Fix a crash on macOS when an `ImageProcessingOptions.Border` is created with an `NSColor` outside an RGB colorspace, including `.black`, `.white`, and the catalog colors such as `.labelColor`. Unlike `UIColor`, `NSColor` raises from `getRed(_:green:blue:alpha:)` instead of converting on the fly, so merely reading the processor `identifier` terminated the process. The color is now converted to sRGB first
+- Fix `ImagePrefetcher.stopPrefetching(with:)` and `ImagePrefetcher.stopPrefetching()` doing nothing for the prefetches that were scheduled but haven't started yet. In the standard collection view pattern, the requests ran the entire download/decode/cache cycle anyway
+- Fix `ImagePrefetcher.priority` not reaching the prefetches that were scheduled but haven't started yet. They kept the priority frozen in their original requests and eventually did the actual work at the old priority
+- Fix the async/await variant of `FetchImage.load(_:)` delivering a result after the load was cancelled or superseded, overwriting the state of the newer load
+- Fix `LazyImage` with the `lowerPriority` disappear behavior permanently lowering the priority of its requests after the view goes off-screen. The override wasn't reset when the view reappeared
+- Fix `LazyImageView` stacking the views created by `makeImageView`. A view was added for every displayed response without removing the previous one, so the orphaned views survived cell reuse, covered the newer content, and retained their images
+
+## Nuke 13.0.6
+
+*May 7, 2026*
+
+- Fix crashes on the Swift 5 boundary caused by dynamic actor isolation when invoking `Optional.map` with closures inferred as `@MainActor` in `LazyImage`, `LazyImageView`, `FetchImage`, and `loadImage(with:into:)`
+
+## Nuke 13.0.5
+
+*May 3, 2026*
+
+- Optimize `ImageCache` reads and writes for concurrent access patterns
+- Optimize `LazyImageView`, `LazyImage`, and `FetchImage` performance
+- Fix an issue with a deprecated closure-based `ImagePipeline` API sometimes invoked after cancellation
+
+## Nuke 13.0.4
+
+*Apr 26, 2026*
+
+- Add missing `@ImagePipelineActor` isolation to the new `willLoadData` method in `ImagePipeline.Delegate` to avoid thread hops
+- Minor other performance improvements
+
+## Nuke 13.0.3
+
+*Apr 26, 2026*
+
+- Minor performance optimizations
+- Eliminate a few `@unchecked Sendable` annotations
+- Deprecate `ImagePipeline.Configuration.maximumDecodedImageSize` and `ImageDecodingContext.maximumDecodedImageSize`. The automatic downscaling implementation has been removed; setting these values has no effect. Use `ImageRequest.ThumbnailOptions` to control decoded image size on a per-request basis
+
+## Nuke 13.0.2
+
+*Apr 14, 2026*
+
+- Fix `ImageDecoders.Default` double-applying EXIF orientation when downscaling images that exceed `maximumDecodedImageSize`
+- Fix the default `maximumDecodedImageSize` being applied too aggressively
+
+## Nuke 13.0.1
+
+*Mar 29, 2026*
+
+- Fix `ThumbnailOptions` double-applying EXIF orientation when `createThumbnailWithTransform` is enabled – https://github.com/kean/Nuke/issues/870
+- Fix Xcode 26.0 compatibility – https://github.com/kean/Nuke/issues/871
 
 ## Nuke 13.0
 
@@ -74,6 +163,8 @@ The test suite was rewritten in Swift Testing with Swift 6 mode enabled and sign
 - Fix `ImageTask.state` remaining `.running` after completion when using the completion-based `loadImage` API
 - Fix `ImageDecoders.Video.decode(_:)` returning an empty image instead of a video thumbnail — https://github.com/kean/Nuke/issues/811
 - Fix `VideoPlayerView` accumulating duplicate `AVPlayerItemDidPlayToEndTime` observers on each `play()`/`reset()` cycle, causing `onVideoFinished` to fire multiple times — https://github.com/kean/Nuke/issues/818
+
+# Nuke 12
 
 ## Nuke 12.9
 
@@ -1423,7 +1514,7 @@ All the documentation for Nuke was rewritten from scratch in Nuke 8. It's now mo
 
 <img width="1158" alt="Screenshot 2019-06-11 at 22 31 18" src="https://user-images.githubusercontent.com/1567433/59304491-aacd2700-8c98-11e9-9630-293d27545b1a.png">
 
-The screenshots come the the **reworked demo** project. It gained new demos including *Image Processing* demo and also a way to change `ImagePipeline` configuration in runtime.
+The screenshots come from the **reworked demo** project. It gained new demos including *Image Processing* demo and also a way to change `ImagePipeline` configuration in runtime.
 
 ### Misc
 
@@ -2422,22 +2513,3 @@ This is a pre-1.0 version, first major release which is going to be available so
 *Mar 11, 2015*
 
 - Initial commit
-
-## Release History
-
-| Nuke | Date         | Swift | Xcode | Platforms                                                   |
-|------|--------------|-------|-------|-------------------------------------------------------------|
-| 13.0 | Mar 22, 2026 | 6.2   | 26.0  | iOS 15.0, watchOS 8.0, macOS 12.0, tvOS 13.0, visionOS 1.0  |
-| 12.0 | Mar 4, 2023  | 5.7   | 14.1  | iOS 13.0, watchOS 6.0, macOS 10.15, tvOS 13.0               |
-| 11.0 | Jul 20, 2022 | 5.6   | 13.3  | iOS 13.0, watchOS 6.0, macOS 10.15, tvOS 13.0               |
-| 10.0 | June 1, 2021 | 5.3   | 12.0  | iOS 11.0, watchOS 4.0, macOS 10.13, tvOS 11.0               |
-| 9.0  | May 20, 2020 | 5.1   | 11.0  | iOS 11.0, watchOS 4.0, macOS 10.13, tvOS 11.0               |
-| 8.0  | July 8, 2019 | 5.0   | 10.2  | iOS 10.0, watchOS 3.0, macOS 10.12, tvOS 10.0               |
-| 7.6  | Apr 7, 2019  | 4.2   | 10.1  | iOS 10.0, watchOS 3.0, macOS 10.12, tvOS 10.0               |
-| 6.0  | Dec 23, 2017 | 4.0   | 9.2   | iOS 9.0, watchOS 2.0, macOS 10.11, tvOS 9.0                 |
-| 5.0  | Feb 1, 2017  | 3.0   | 8.0   | iOS 9.0, watchOS 2.0, macOS 10.11, tvOS 9.0                 |
-| 4.0  | Sep 19, 2016 | 3.0   | 8.0   | iOS 9.0, watchOS 2.0, macOS 10.11, tvOS 9.0                 |
-| 3.0  | Mar 26, 2016 | 2.2   | 7.3   | iOS 8.0, watchOS 2.0, macOS 10.9, tvOS 9.0                  |
-| 2.0  | Feb 6, 2016  | 2.0   | 7.1   | iOS 8.0, watchOS 2.0, macOS 10.9, tvOS 9.0                  |
-| 1.0  | Oct 18, 2015 | 2.0   | 7.0   | iOS 8.0, watchOS 2.0, macOS 10.9                            |
-| 0.2  | Sep 18, 2015 | 2.0   | 7.0   | iOS 8.0, watchOS 2.0                                        |

@@ -61,6 +61,10 @@ public final class ImageTask: Hashable, CustomStringConvertible, @unchecked Send
         withNonisolatedStateLock { $0.state }
     }
 
+    var isCancelled: Bool {
+        withNonisolatedStateLock { $0.isCancelled }
+    }
+
     /// The state of the image task.
     @frozen public enum State {
         /// The task is currently running.
@@ -151,6 +155,8 @@ public final class ImageTask: Hashable, CustomStringConvertible, @unchecked Send
     @ImagePipelineActor var _continuation: UnsafeContinuation<ImageResponse, any Error>?
     @ImagePipelineActor var _state: State = .running
     @ImagePipelineActor var _streamContinuations = ContiguousArray<AsyncStream<Event>.Continuation>()
+    @ImagePipelineActor var _subscription: TaskSubscription?
+    @ImagePipelineActor weak var _node: LinkedList<ImageTask>.Node?
 
     deinit {
         lock.deinitialize(count: 1)
@@ -175,6 +181,7 @@ public final class ImageTask: Hashable, CustomStringConvertible, @unchecked Send
     /// unless there is an equivalent outstanding task running.
     public func cancel() {
         let didChange: Bool = withNonisolatedStateLock {
+            $0.isCancelled = true
             guard $0.state == .running else { return false }
             $0.state = .cancelled
             return true
@@ -234,10 +241,14 @@ public final class ImageTask: Hashable, CustomStringConvertible, @unchecked Send
         _dispatch(.finished(result))
     }
 
+    // The state mirror needs to be eliminated.
     @ImagePipelineActor func _setState(_ state: State) -> Bool {
         guard _state == .running else { return false }
         _state = state
-        withNonisolatedStateLock { $0.state = state }
+        withNonisolatedStateLock {
+            guard $0.state == .running else { return }
+            $0.state = state
+        }
         return true
     }
 
@@ -285,7 +296,6 @@ public final class ImageTask: Hashable, CustomStringConvertible, @unchecked Send
     }
 }
 
-
 // MARK: - ImageTask (Private)
 
 extension ImageTask {
@@ -317,6 +327,7 @@ extension ImageTask {
     /// - warning: Must be accessed using `withNonisolatedState`.
     private struct NonisolatedState {
         var state: ImageTask.State = .running
+        var isCancelled = false
         var priority: ImageRequest.Priority
         var progress = Progress(completed: 0, total: 0)
     }

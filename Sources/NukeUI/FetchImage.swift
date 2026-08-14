@@ -14,10 +14,11 @@ public final class FetchImage: ObservableObject, Identifiable {
 
     /// Returns the fetched image.
     public var image: Image? {
+        guard let imageContainer else { return nil }
 #if os(macOS)
-        imageContainer.map { Image(nsImage: $0.image) }
+        return Image(nsImage: imageContainer.image)
 #else
-        imageContainer.map { Image(uiImage: $0.image) }
+        return Image(uiImage: imageContainer.image)
 #endif
     }
 
@@ -65,7 +66,11 @@ public final class FetchImage: ObservableObject, Identifiable {
     /// (the default), the request's own priority is used. Can be updated while
     /// a task is already running.
     public var priority: ImageRequest.Priority? {
-        didSet { priority.map { imageTask?.priority = $0 } }
+        didSet {
+            if let priority {
+                imageTask?.priority = priority
+            }
+        }
     }
 
     /// A pipeline used for performing image requests.
@@ -85,6 +90,12 @@ public final class FetchImage: ObservableObject, Identifiable {
     private var lastResponse: ImageResponse?
     private var cancellable: AnyCancellable?
 
+    /// Incremented every time the current request is cancelled or superseded.
+    /// Used to discard the results of the async/await-based loads: `Task`
+    /// cancellation is cooperative, so the action can complete long after the
+    /// load it belongs to is no longer current.
+    private var loadGeneration = 0
+
     deinit {
         imageTask?.cancel()
     }
@@ -96,16 +107,21 @@ public final class FetchImage: ObservableObject, Identifiable {
 
     /// Loads an image with the given URL.
     public func load(_ url: URL?) {
-        load(url.map { ImageRequest(url: $0) })
+        if let url {
+            load(ImageRequest(url: url))
+        } else {
+            load(nil as ImageRequest?)
+        }
     }
 
     /// Loads an image with the given request.
     public func load(_ request: ImageRequest?) {
         assert(Thread.isMainThread, "Must be called from the main thread")
 
-        reset()
+        cancel()
 
         guard var request else {
+            reset()
             handle(result: .failure(ImagePipeline.Error.imageRequestMissing))
             return
         }
@@ -118,14 +134,21 @@ public final class FetchImage: ObservableObject, Identifiable {
         }
 
         // Quick synchronous memory cache lookup
-        if let image = pipeline.cache[request] {
-            if image.isPreview {
-                imageContainer = image // Display progressive image
-            } else {
-                let response = ImageResponse(container: image, request: request, cacheType: .memory)
-                handle(result: .success(response))
-                return
-            }
+        let cached = pipeline.cache[request]
+        if let image = cached, !image.isPreview {
+            // Set imageContainer and result directly to avoid a nil flicker.
+            clearLoadingState()
+            let response = ImageResponse(container: image, request: request, cacheType: .memory)
+            imageContainer = image
+            result = .success(response)
+            onCompletion?(.success(response))
+            return
+        }
+
+        reset()
+
+        if let image = cached {
+            imageContainer = image // Display progressive image
         }
 
         isLoading = true
@@ -179,13 +202,16 @@ public final class FetchImage: ObservableObject, Identifiable {
         reset()
         isLoading = true
 
-        let task = Task {
+        let generation = loadGeneration
+        let task = Task { [weak self] in
             do {
                 let response = try await action()
+                guard let self, generation == loadGeneration else { return } // Released, cancelled, or superseded
                 withTransaction(transaction) {
                     handle(result: .success(response))
                 }
             } catch {
+                guard let self, generation == loadGeneration else { return } // Released, cancelled, or superseded
                 handle(result: .failure(error))
             }
         }
@@ -233,6 +259,10 @@ public final class FetchImage: ObservableObject, Identifiable {
 
         // publisher-based
         cancellable = nil
+
+        // async/await-based (the task is cancelled by `cancellable`, but the
+        // action isn't guaranteed to stop, so its result has to be discarded)
+        loadGeneration &+= 1
     }
 
     /// Resets the `FetchImage` instance by cancelling the request and removing
@@ -241,10 +271,14 @@ public final class FetchImage: ObservableObject, Identifiable {
         cancel()
 
         // Avoid publishing unchanged values
-        if isLoading { isLoading = false }
+        clearLoadingState()
         if imageContainer != nil { imageContainer = nil }
         if result != nil { result = nil }
-        if _progress != nil { _progress = nil }
         lastResponse = nil // publisher-only
+    }
+
+    private func clearLoadingState() {
+        if isLoading { isLoading = false }
+        if _progress != nil { _progress = nil }
     }
 }

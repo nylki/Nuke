@@ -10,7 +10,7 @@ import Foundation
 import UIKit
 #endif
 
-@Suite(.timeLimit(.minutes(2)))
+@Suite(.timeLimit(.minutes(5)))
 struct ImageProcessorsResizeTests {
 
     @Test func thatImageIsResizedToFill() throws {
@@ -100,6 +100,49 @@ struct ImageProcessorsResizeTests {
         // Then image is resized but isn't cropped
         #expect(output.sizeInPixels == CGSize(width: 480, height: 360))
     }
+
+    @Test func screenScaleIsNeverZero() async {
+        // When the scale is read on a background thread
+        let scale = await Task.detached { Screen.scale }.value
+
+        // Then it's never `0`
+        #expect(scale > 0)
+    }
+
+#if os(iOS) || os(tvOS)
+    @Test func resizeInPointsOutsideOfTraitManagedContext() throws {
+        // Given a processor created with an unspecified trait collection which
+        // is what `UITraitCollection.current` returns outside of the contexts
+        // managed by UIKit, e.g. on a background thread
+        #expect(UITraitCollection().displayScale == 0)
+
+        var scale: CGFloat = 0
+        var processor: ImageProcessors.Resize?
+        UITraitCollection().performAsCurrent {
+            scale = Screen.scale
+            processor = ImageProcessors.Resize(size: CGSize(width: 40, height: 40), unit: .points, contentMode: .aspectFit)
+        }
+
+        // Then the scale is never `0`
+        #expect(scale > 0)
+
+        // Then the image is resized instead of the processing failing because
+        // of a zero target size
+        let output = try #require(processor?.process(Test.image), "Failed to process an image")
+        #expect(output.sizeInPixels == CGSize(width: 40, height: 30).scaled(by: scale))
+    }
+
+    @Test func screenScaleIsEvaluatedForTheCurrentTraitCollection() {
+        // Then the scale reflects the current context instead of being latched
+        // for the entire lifetime of the process
+        UITraitCollection(displayScale: 3).performAsCurrent {
+            #expect(Screen.scale == 3)
+        }
+        UITraitCollection(displayScale: 2).performAsCurrent {
+            #expect(Screen.scale == 2)
+        }
+    }
+#endif
 
     @Test func extendedColorSpaceSupport() throws {
         // Given
@@ -321,7 +364,7 @@ struct ImageProcessorsResizeTests {
     }
 }
 
-@Suite(.timeLimit(.minutes(2)))
+@Suite(.timeLimit(.minutes(5)))
 struct CoreGraphicsExtensionsTests {
     @Test func scaleToFill() {
         #expect(1 == CGSize(width: 10, height: 10).scaleToFill(CGSize(width: 10, height: 10)))

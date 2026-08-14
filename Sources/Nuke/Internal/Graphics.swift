@@ -164,7 +164,7 @@ extension CGContext {
             return ctx
         }
         // In case the combination of parameters (color space, bits per component, etc)
-        // is nit supported by Core Graphics, switch to default context.
+        // is not supported by Core Graphics, switch to default context.
         // - Quartz 2D Programming Guide
         // - https://github.com/kean/Nuke/issues/35
         // - https://github.com/kean/Nuke/issues/57
@@ -323,11 +323,30 @@ extension CGSize {
 
 enum Screen {
 #if os(iOS) || os(tvOS)
-    /// Returns the current screen scale.
-    static let scale: CGFloat = UITraitCollection.current.displayScale
+    /// Returns the current screen scale. Never returns `0`.
+    ///
+    /// - note: `UITraitCollection.current` is only populated in the contexts
+    /// managed by UIKit and its `displayScale` is `0` everywhere else, e.g. when
+    /// a request is created on a background thread. That's why the scale has to
+    /// be re-evaluated on every access with the last known valid value used as
+    /// a fallback – caching it once would latch `0` for the entire lifetime of
+    /// the process.
+    static var scale: CGFloat {
+        let scale = UITraitCollection.current.displayScale
+        guard scale > 0 else {
+            return lastKnownScale.value
+        }
+        lastKnownScale.testAndSet(scale)
+        return scale
+    }
+
+    private static let lastKnownScale = Mutex<CGFloat>(value: 1)
 #elseif os(watchOS)
-    /// Returns the current screen scale.
-    static let scale: CGFloat = WKInterfaceDevice.current().screenScale
+    /// Returns the current screen scale. Never returns `0`.
+    ///
+    /// - note: unlike `UITraitCollection.current`, `WKInterfaceDevice` reports
+    /// the scale of the device regardless of the context, so it's safe to cache.
+    static let scale: CGFloat = max(1, WKInterfaceDevice.current().screenScale)
 #else
     /// Always returns 1.
     static let scale: CGFloat = 1
@@ -344,7 +363,17 @@ extension Color {
     /// Returns a hex representation of the color, e.g. "#FFFFAA".
     var hex: String {
         var (r, g, b, a) = (CGFloat(0), CGFloat(0), CGFloat(0), CGFloat(0))
+#if os(macOS)
+        // Unlike `UIColor`, `NSColor` doesn't convert the color on the fly and
+        // raises an `NSInvalidArgumentException` if it's outside an RGB
+        // colorspace – including the grays, e.g. `.black`, and the catalog
+        // colors, e.g. `.labelColor`. `usingColorSpace(_:)` returns `nil` for
+        // the colors that can't be converted at all, e.g. pattern colors, which
+        // `UIColor` also reports zero components for.
+        usingColorSpace(.sRGB)?.getRed(&r, green: &g, blue: &b, alpha: &a)
+#else
         getRed(&r, green: &g, blue: &b, alpha: &a)
+#endif
         let components = [r, g, b, a < 1 ? a : nil]
         return "#" + components
             .compactMap { $0 }
@@ -372,6 +401,16 @@ func makeThumbnail(data: Data, options: ImageRequest.ThumbnailOptions, scale: CG
         kCGImageSourceThumbnailMaxPixelSize: maxPixelSize] as [CFString: Any]
     guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
         return nil
+    }
+    // When `createThumbnailWithTransform` is enabled, ImageIO already bakes
+    // the EXIF orientation into the thumbnail pixels. Passing the original
+    // orientation to UIImage would apply it a second time (double rotation).
+    if flags.contains(.createThumbnailWithTransform) {
+#if canImport(UIKit)
+        return PlatformImage(cgImage: image, scale: scale, orientation: .up)
+#else
+        return PlatformImage(cgImage: image)
+#endif
     }
     return makeImage(from: image, source: source, scale: scale)
 }

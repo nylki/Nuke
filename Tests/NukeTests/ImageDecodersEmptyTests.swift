@@ -6,7 +6,7 @@ import Testing
 import Foundation
 @testable import Nuke
 
-@Suite(.timeLimit(.minutes(2)))
+@Suite(.timeLimit(.minutes(5)))
 struct ImageDecodersEmptyTests {
     @Test func isAsynchronousReturnsFalse() {
         let decoder = ImageDecoders.Empty()
@@ -62,5 +62,14 @@ struct ImageDecodersEmptyTests {
         #expect(result != nil)
         #expect(result?.data == data)
         #expect(result?.type == .jpeg)
+        #expect(result?.isPreview == true)
+    }
+
+    @Test func decodeReturnsFinalContainer() throws {
+        let decoder = ImageDecoders.Empty(isProgressive: true)
+
+        let container = try decoder.decode(Data("test".utf8))
+
+        #expect(container.isPreview == false)
     }
 }

@@ -9,7 +9,7 @@ import Foundation
 /// Performs all the quick cache lookups and also manages image processing.
 /// The coalescing for image processing is implemented on demand (extends the
 /// scenarios in which coalescing can kick in).
-final class TaskLoadImage: AsyncPipelineTask<ImageResponse>, @unchecked Sendable {
+final class TaskLoadImage: AsyncPipelineTask<ImageResponse> {
     override func start() {
         if let container = pipeline.cache[request] {
             let response = ImageResponse(container: container, request: request, cacheType: .memory)
@@ -196,6 +196,6 @@ final class TaskLoadImage: AsyncPipelineTask<ImageResponse>, @unchecked Sendable
     /// subscribed to it, which means that the request was initiated by the
     /// user and not the framework.
     private var hasDirectSubscribers: Bool {
-        subscribers.contains { $0 is ImageTask }
+        hasSubscriber(of: ImageTask.self)
     }
 }
